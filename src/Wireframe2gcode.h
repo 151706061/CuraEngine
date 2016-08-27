@@ -4,17 +4,17 @@
 
 #include <functional> // passing function pointer or lambda as argument to a function
 
+#include "utils/NoCopy.h"
+
 #include "weaveDataStorage.h"
 #include "commandSocket.h"
-#include "settings.h"
+#include "settings/settings.h"
 
-#include "modelFile/modelFile.h" // PrintObject
+#include "MeshGroup.h"
 #include "slicer.h"
 
 #include "utils/polygon.h"
 #include "Weaver.h"
-
-#include "debug.h"
 
 namespace cura
 {
@@ -22,7 +22,7 @@ namespace cura
 /*!
  * Export class for exporting wireframe print gcode / weaver gcode / wireprint gcode.
  */
-class Wireframe2gcode : public SettingsBase
+class Wireframe2gcode : public SettingsMessenger, NoCopy
 {
 private:
     static const int STRATEGY_COMPENSATE = 0;
@@ -31,36 +31,36 @@ private:
     
     int initial_layer_thickness;
     int filament_diameter;
-    int extrusionWidth;
-    int flowConnection;// = getSettingInt("wireframeFlowConnection");
-    int flowFlat; // = getSettingInt("wireframeFlowFlat");
-    double extrusion_per_mm_connection; // = lineArea / filament_area * double(flowConnection) / 100.0;
-    double extrusion_per_mm_flat; // = lineArea / filament_area * double(flowFlat) / 100.0;
-    int nozzle_outer_diameter; // = getSettingInt("machineNozzleTipOuterDiameter"); // ___       ___   .
-    int nozzle_head_distance; // = getSettingInt("machineNozzleHeadDistance");      //    |     |      .
-    int nozzle_expansion_angle; // = getSettingInt("machineNozzleExpansionAngle");  //     \_U_/       .
-    int nozzle_clearance; // = getSettingInt("wireframeNozzleClearance");    // at least line width
-    int nozzle_top_diameter; // = tan(static_cast<double>(nozzle_expansion_angle)/180.0 * M_PI) * connectionHeight + nozzle_outer_diameter + nozzle_clearance;
-    int moveSpeed; // = 40;
-    int speedBottom; // =  getSettingInt("wireframePrintspeedBottom");
-    int speedUp; // = getSettingInt("wireframePrintspeedUp");
-    int speedDown; // = getSettingInt("wireframePrintspeedDown");
-    int speedFlat; // = getSettingInt("wireframePrintspeedFlat");
-    int connectionHeight; // = getSettingInt("wireframeConnectionHeight"); 
-    int roof_inset; // = getSettingInt("wireframeRoofInset"); 
-    double flat_delay; // = getSettingInt("wireframeFlatDelay")/100.0;
-    double bottom_delay; // = getSettingInt("wireframeBottomDelay")/100.0;
-    double top_delay; // = getSettingInt("wireframeTopDelay")/100.0;
-    int up_dist_half_speed; // = getSettingInt("wireframeUpDistHalfSpeed");
-    int top_jump_dist; // = getSettingInt("wireframeTopJump");
-    int fall_down; // = getSettingInt("wireframeFallDown");
-    int drag_along; // = getSettingInt("wireframeDragAlong");
-    int strategy; // = getSettingInt("wireframeStrategy"); //  HIGHER_BEND_NO_STRAIGHTEN; // RETRACT_TO_STRAIGHTEN; // MOVE_TO_STRAIGHTEN; // 
-    double go_back_to_last_top; // = false;
-    int straight_first_when_going_down; // = getSettingInt("wireframeStraightBeforeDown"); // %
-    int roof_fall_down; // = getSettingInt("wireframeRoofFallDown");
-    int roof_drag_along; // = getSettingInt("wireframeRoofDragAlong");
-    double roof_outer_delay; // = getSettingInt("wireframeRoofOuterDelay")/100.0;
+    int line_width;
+    double flowConnection;
+    double flowFlat; 
+    double extrusion_per_mm_connection; 
+    double extrusion_per_mm_flat; 
+    int nozzle_outer_diameter;
+    int nozzle_head_distance;
+    double nozzle_expansion_angle;
+    int nozzle_clearance;
+    int nozzle_top_diameter;
+    double moveSpeed;
+    double speedBottom;
+    double speedUp;
+    double speedDown;
+    double speedFlat;
+    int connectionHeight;
+    int roof_inset;
+    double flat_delay;
+    double bottom_delay;
+    double top_delay;
+    int up_dist_half_speed;
+    int top_jump_dist;
+    int fall_down;
+    int drag_along;
+    int strategy;
+    double go_back_to_last_top;
+    int straight_first_when_going_down;
+    int roof_fall_down;
+    int roof_drag_along;
+    double roof_outer_delay;
     
     RetractionConfig standard_retraction_config; //!< The standard retraction settings used for moves between parts etc.
     
@@ -69,13 +69,28 @@ public:
     
     Wireframe2gcode(Weaver& weaver, GCodeExport& gcode, SettingsBase* settings_base);
     
-    void writeGCode(CommandSocket* commandSocket);
+    void writeGCode();
 
 
 private:
-    WireFrame wireFrame;
+    WireFrame& wireFrame;
     
-    void writeFill(std::vector<WeaveRoofPart>& fill_insets, Polygons& outlines
+    /*!
+     * Startup gcode: nozzle temp up, retraction settings, bed temp
+     */
+    void processStartingCode();
+    
+    /*!
+     * Lay down a skirt
+     */
+    void processSkirt();
+    
+    /*!
+     * End gcode: nozzle temp down
+     */
+    void finalize();
+    
+    void writeFill(std::vector<WeaveRoofPart>& infill_insets, Polygons& outlines
         , std::function<void (Wireframe2gcode& thiss, WeaveRoofPart& inset, WeaveConnectionPart& part, unsigned int segment_idx)> connectionHandler
         , std::function<void (Wireframe2gcode& thiss, WeaveConnectionSegment& p)> flatHandler);
     

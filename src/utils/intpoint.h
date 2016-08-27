@@ -15,10 +15,15 @@ Integer points are used to avoid floating point rounding errors, and because Cli
 #include <stdint.h>
 #include <cmath>
 
+#include <functional> // for hash function obkject
+
 #include <iostream> // auto-serialization / auto-toString()
 
 #define INT2MM(n) (double(n) / 1000.0)
+#define INT2MM2(n) (double(n) / 1000000.0)
 #define MM2INT(n) (int64_t((n) * 1000))
+#define MM2_2INT(n) (int64_t((n) * 1000000))
+#define MM3_2INT(n) (int64_t((n) * 1000000000))
 
 #define INT2MICRON(n) ((n) / 1)
 #define MICRON2INT(n) ((n) * 1)
@@ -36,6 +41,10 @@ Integer points are used to avoid floating point rounding errors, and because Cli
 #pragma message("WARNING: You need to implement DEPRECATED for this compiler")
 #define DEPRECATED(func) func
 #endif
+
+
+namespace cura
+{
 
 class Point3
 {
@@ -66,14 +75,14 @@ public:
     }
 
 
-    int32_t max()
+    int32_t max() const
     {
         if (x > y && x > z) return x;
         if (y > z) return y;
         return z;
     }
 
-    bool testLength(int32_t len)
+    bool testLength(int32_t len) const
     {
         if (x > len || x < -len)
             return false;
@@ -110,13 +119,15 @@ public:
             x*p.y-y*p.x);
     }
 
-    int64_t dot(const Point3& p)
+    int64_t dot(const Point3& p) const
     {
         return x*p.x + y*p.y + z*p.z;
     }
 
 };
 
+static Point3 no_point3(std::numeric_limits<int32_t>::infinity(), std::numeric_limits<int32_t>::infinity(), std::numeric_limits<int32_t>::infinity());
+    
 inline Point3 operator*(const int32_t i, const Point3& rhs) {
     return rhs * i;
 }
@@ -124,6 +135,8 @@ inline Point3 operator*(const int32_t i, const Point3& rhs) {
 inline Point3 operator*(const double d, const Point3& rhs) {
     return rhs * d;
 }
+
+using coord_t = ClipperLib::cInt;
 
 /* 64bit Points are used mostly troughout the code, these are the 2D points from ClipperLib */
 typedef ClipperLib::IntPoint Point;
@@ -136,6 +149,8 @@ public:
 #define POINT_MIN std::numeric_limits<ClipperLib::cInt>::min()
 #define POINT_MAX std::numeric_limits<ClipperLib::cInt>::max()
 
+static Point no_point(std::numeric_limits<int32_t>::infinity(), std::numeric_limits<int32_t>::infinity());
+
 /* Extra operators to make it easier to do math with the 64bit Point objects */
 INLINE Point operator-(const Point& p0) { return Point(-p0.X, -p0.Y); }
 INLINE Point operator+(const Point& p0, const Point& p1) { return Point(p0.X+p1.X, p0.Y+p1.Y); }
@@ -143,6 +158,7 @@ INLINE Point operator-(const Point& p0, const Point& p1) { return Point(p0.X-p1.
 INLINE Point operator*(const Point& p0, const int32_t i) { return Point(p0.X*i, p0.Y*i); }
 INLINE Point operator*(const int32_t i, const Point& p0) { return p0 * i; }
 INLINE Point operator/(const Point& p0, const int32_t i) { return Point(p0.X/i, p0.Y/i); }
+INLINE Point operator/(const Point& p0, const Point& p1) { return Point(p0.X/p1.X, p0.Y/p1.Y); }
 
 INLINE Point& operator += (Point& p0, const Point& p1) { p0.X += p1.X; p0.Y += p1.Y; return p0; }
 INLINE Point& operator -= (Point& p0, const Point& p1) { p0.X -= p1.X; p0.Y -= p1.Y; return p0; }
@@ -188,7 +204,7 @@ INLINE Point normal(const Point& p0, int64_t len)
     return p0 * len / _len;
 }
 
-INLINE Point crossZ(const Point& p0)
+INLINE Point turn90CCW(const Point& p0)
 {
     return Point(-p0.Y, p0.X);
 }
@@ -203,6 +219,25 @@ INLINE int angle(const Point& p)
     if (angle < 0.0) angle += 360.0;
     return angle;
 }
+
+}//namespace cura
+    
+namespace std {
+template <>
+struct hash<cura::Point> {
+    size_t operator()(const cura::Point & pp) const
+    {
+        static int prime = 31;
+        int result = 89;
+        result = result * prime + pp.X;
+        result = result * prime + pp.Y;
+        return result; 
+    }
+};
+}
+
+namespace cura
+{
 
 class PointMatrix
 {
@@ -252,6 +287,11 @@ public:
 inline Point3 operator+(const Point3& p3, const Point& p2) {
     return Point3(p3.x + p2.X, p3.y + p2.Y, p3.z);
 }
+inline Point3& operator+=(Point3& p3, const Point& p2) {
+    p3.x += p2.X;
+    p3.y += p2.Y;
+    return p3;
+}
 
 inline Point operator+(const Point& p2, const Point3& p3) {
     return Point(p3.x + p2.X, p3.y + p2.Y);
@@ -261,9 +301,16 @@ inline Point operator+(const Point& p2, const Point3& p3) {
 inline Point3 operator-(const Point3& p3, const Point& p2) {
     return Point3(p3.x - p2.X, p3.y - p2.Y, p3.z);
 }
+inline Point3& operator-=(Point3& p3, const Point& p2) {
+    p3.x -= p2.X;
+    p3.y -= p2.Y;
+    return p3;
+}
 
 inline Point operator-(const Point& p2, const Point3& p3) {
     return Point(p2.X - p3.x, p2.Y - p3.y);
 }
 
+}//namespace cura
 #endif//INT_POINT_H
+

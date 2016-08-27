@@ -4,35 +4,38 @@
 #include <fstream> // debug IO
 #include <unistd.h>
 
+#include "progress/Progress.h"
 #include "weaveDataStorage.h"
+#include "PrintFeature.h"
 
 namespace cura 
 {
 
-void Weaver::weave(PrintObject* object, CommandSocket* commandSocket)
-{
-    int maxz = object->max().z;
+void Weaver::weave(MeshGroup* meshgroup)
+{   
+    wireFrame.meshgroup = meshgroup;
+    
+    int maxz = meshgroup->max().z;
 
     int layer_count = (maxz - initial_layer_thickness) / connectionHeight + 1;
 
-    DEBUG_SHOW(layer_count);
+    std::cerr << "Layer count: " << layer_count << "\n";
 
     std::vector<cura::Slicer*> slicerList;
 
-    for(Mesh& mesh : object->meshes)
+    for(Mesh& mesh : meshgroup->meshes)
     {
         cura::Slicer* slicer = new cura::Slicer(&mesh, initial_layer_thickness, connectionHeight, layer_count, mesh.getSettingBoolean("meshfix_keep_open_polygons"), mesh.getSettingBoolean("meshfix_extensive_stitching"));
         slicerList.push_back(slicer);
     }
 
-    
     int starting_layer_idx;
     { // find first non-empty layer
         for (starting_layer_idx = 0; starting_layer_idx < layer_count; starting_layer_idx++)
         {
             Polygons parts;
             for (cura::Slicer* slicer : slicerList)
-                parts.add(slicer->layers[starting_layer_idx].polygonList);  
+                parts.add(slicer->layers[starting_layer_idx].polygons);  
             
             if (parts.size() > 0)
                 break;
@@ -48,35 +51,41 @@ void Weaver::weave(PrintObject* object, CommandSocket* commandSocket)
     {
         int starting_z = -1;
         for (cura::Slicer* slicer : slicerList)
-            wireFrame.bottom_outline.add(slicer->layers[starting_layer_idx].polygonList);
+            wireFrame.bottom_outline.add(slicer->layers[starting_layer_idx].polygons);
         
-        if (commandSocket)
-            commandSocket->sendPolygons(Inset0Type, 0, wireFrame.bottom_outline);
+        CommandSocket::sendPolygons(PrintFeatureType::OuterWall, /*0,*/ wireFrame.bottom_outline, 1);
         
-        wireFrame.z_bottom = slicerList[0]->layers[starting_layer_idx].z;
+        if (slicerList.empty()) //Wait, there is nothing to slice.
+        {
+            wireFrame.z_bottom = 0;
+        }
+        else
+        {
+            wireFrame.z_bottom = slicerList[0]->layers[starting_layer_idx].z;
+        }
         
         Point starting_point_in_layer;
         if (wireFrame.bottom_outline.size() > 0)
             starting_point_in_layer = (wireFrame.bottom_outline.max() + wireFrame.bottom_outline.min()) / 2;
         else 
-            starting_point_in_layer = (Point(0,0) + object->max() + object->min()) / 2;
+            starting_point_in_layer = (Point(0,0) + meshgroup->max() + meshgroup->min()) / 2;
         
+        Progress::messageProgressStage(Progress::Stage::INSET_SKIN, nullptr);
         for (int layer_idx = starting_layer_idx + 1; layer_idx < layer_count; layer_idx++)
         {
-            logProgress("inset", layer_idx+1, layer_count); // abuse the progress system of the normal mode of CuraEngine
+            Progress::messageProgress(Progress::Stage::INSET_SKIN, layer_idx+1, layer_count); // abuse the progress system of the normal mode of CuraEngine
             
             Polygons parts1;
             for (cura::Slicer* slicer : slicerList)
-                parts1.add(slicer->layers[layer_idx].polygonList);
+                parts1.add(slicer->layers[layer_idx].polygons);
 
             
             Polygons chainified;
 
             chainify_polygons(parts1, starting_point_in_layer, chainified, false);
             
-            if (commandSocket)
-                commandSocket->sendPolygons(Inset0Type, layer_idx - starting_layer_idx, chainified);
-            
+            CommandSocket::sendPolygons(PrintFeatureType::OuterWall, /*layer_idx - starting_layer_idx,*/ chainified, 1);
+
             if (chainified.size() > 0)
             {
                 if (starting_z == -1) starting_z = slicerList[0]->layers[layer_idx-1].z;
@@ -97,9 +106,10 @@ void Weaver::weave(PrintObject* object, CommandSocket* commandSocket)
     {
         Polygons* lower_top_parts = &wireFrame.bottom_outline;
         
+        Progress::messageProgressStage(Progress::Stage::SUPPORT, nullptr);
         for (unsigned int layer_idx = 0; layer_idx < wireFrame.layers.size(); layer_idx++)
         {
-            logProgress("skin", layer_idx+1, wireFrame.layers.size()); // abuse the progress system of the normal mode of CuraEngine
+            Progress::messageProgress(Progress::Stage::SUPPORT, layer_idx+1, wireFrame.layers.size()); // abuse the progress system of the normal mode of CuraEngine
             
             WeaveLayer& layer = wireFrame.layers[layer_idx];
             
@@ -131,16 +141,21 @@ void Weaver::weave(PrintObject* object, CommandSocket* commandSocket)
 
 
     { // roofs:
-        
-        WeaveLayer& top_layer = wireFrame.layers.back();
-        Polygons to_be_supported; // empty for the top layer
-        fillRoofs(top_layer.supported, to_be_supported, -1, top_layer.z1, top_layer.roofs);
+        if (!wireFrame.layers.empty()) //If there are no layers, create no roof.
+        {
+            WeaveLayer& top_layer = wireFrame.layers.back();
+            Polygons to_be_supported; // empty for the top layer
+            fillRoofs(top_layer.supported, to_be_supported, -1, top_layer.z1, top_layer.roofs);
+        }
     }
     
     
     { // bottom:
-        Polygons to_be_supported; // is empty for the bottom layer, cause the order of insets doesn't really matter (in a sense everything is to be supported)
-        fillRoofs(wireFrame.bottom_outline, to_be_supported, -1, wireFrame.layers.front().z0, wireFrame.bottom_infill);
+        if (!wireFrame.layers.empty()) //If there are no layers, create no bottom.
+        {
+            Polygons to_be_supported; // is empty for the bottom layer, cause the order of insets doesn't really matter (in a sense everything is to be supported)
+            fillRoofs(wireFrame.bottom_outline, to_be_supported, -1, wireFrame.layers.front().z0, wireFrame.bottom_infill);
+        }
     }
     
 }
@@ -151,7 +166,7 @@ void Weaver::createHorizontalFill(Polygons& lower_top_parts, WeaveLayer& layer, 
 {
     int64_t bridgable_dist = connectionHeight;
     
-    Polygons& polys_below = lower_top_parts;
+//     Polygons& polys_below = lower_top_parts;
     Polygons& polys_here = layer.supported;
     Polygons& polys_above = layer_above;
 
@@ -309,7 +324,7 @@ void Weaver::connections2moves(WeaveRoofPart& inset)
             WeaveConnectionSegment& segment = segments[idx];
             assert(segment.segmentType == WeaveSegmentType::UP);
             Point3 from = (idx == 0)? part.connection.from : segments[idx-1].to;
-            bool skipped = (segment.to - from).vSize2() < extrusionWidth * extrusionWidth;
+            bool skipped = (segment.to - from).vSize2() < line_width * line_width;
             if (skipped)
             {
                 unsigned int begin = idx;
@@ -318,9 +333,11 @@ void Weaver::connections2moves(WeaveRoofPart& inset)
                     WeaveConnectionSegment& segment = segments[idx];
                     assert(segments[idx].segmentType == WeaveSegmentType::UP);
                     Point3 from = (idx == 0)? part.connection.from : segments[idx-1].to;
-                    bool skipped = (segment.to - from).vSize2() < extrusionWidth * extrusionWidth;
+                    bool skipped = (segment.to - from).vSize2() < line_width * line_width;
                     if (!skipped) 
+                    {
                         break;
+                    }
                 }
                 int end = idx - ((include_half_of_last_down)? 2 : 1);
                 if (idx >= segments.size())
@@ -370,13 +387,11 @@ void Weaver::connect(Polygons& parts0, int z0, Polygons& parts1, int z1, WeaveCo
 
 void Weaver::chainify_polygons(Polygons& parts1, Point start_close_to, Polygons& result, bool include_last)
 {
-    
-        
     for (unsigned int prt = 0 ; prt < parts1.size(); prt++)
     {
         const PolygonRef upperPart = parts1[prt];
         
-        ClosestPolygonPoint closestInPoly = findClosest(start_close_to, upperPart);
+        ClosestPolygonPoint closestInPoly = PolygonUtils::findClosest(start_close_to, upperPart);
 
         
         PolygonRef part_top = result.newPoly();
@@ -385,9 +400,9 @@ void Weaver::chainify_polygons(Polygons& parts1, Point start_close_to, Polygons&
         bool found = true;
         int idx = 0;
         
-        for (Point upper_point = upperPart[closestInPoly.pos]; found; upper_point = next_upper.location)
+        for (Point upper_point = upperPart[closestInPoly.point_idx]; found; upper_point = next_upper.location)
         {
-            found = getNextPointWithDistance(upper_point, nozzle_top_diameter, upperPart, idx, closestInPoly.pos, next_upper);
+            found = PolygonUtils::getNextPointWithDistance(upper_point, nozzle_top_diameter, upperPart, idx, closestInPoly.point_idx, next_upper);
 
             
             if (!found) 
@@ -412,7 +427,7 @@ void Weaver::connect_polygons(Polygons& supporting, int z0, Polygons& supported,
  
     if (supporting.size() < 1)
     {
-        DEBUG_PRINTLN("lower layer has zero parts!");
+        std::cerr << "lower layer has zero parts!\n";
         return;
     }
     
@@ -437,7 +452,7 @@ void Weaver::connect_polygons(Polygons& supporting, int z0, Polygons& supported,
         for (const Point& upper_point : upperPart)
         {
             
-            ClosestPolygonPoint lowerPolyPoint = findClosest(upper_point, supporting);
+            ClosestPolygonPoint lowerPolyPoint = PolygonUtils::findClosest(upper_point, supporting);
             Point& lower = lowerPolyPoint.location;
             
             Point3 lower3 = Point3(lower.X, lower.Y, z0);
@@ -458,16 +473,4 @@ void Weaver::connect_polygons(Polygons& supporting, int z0, Polygons& supported,
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-} // namespace cura
-    
+}//namespace cura

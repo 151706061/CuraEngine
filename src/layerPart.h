@@ -4,6 +4,7 @@
 
 #include "sliceDataStorage.h"
 #include "slicer.h"
+#include "commandSocket.h"
 
 /*
 The layer-part creation step is the first step in creating actual useful data for 3D printing.
@@ -21,9 +22,9 @@ namespace cura {
 
 void createLayerWithParts(SliceLayer& storageLayer, SlicerLayer* layer, bool union_layers, bool union_all_remove_holes);
 
-void createLayerParts(SliceMeshStorage& storage, Slicer* slicer, bool union_layers, bool union_all_remove_holes);
+void createLayerParts(SliceMeshStorage& mesh, Slicer* slicer, bool union_layers, bool union_all_remove_holes);
 
-void dumpLayerparts(SliceDataStorage& storage, const char* filename);
+void layerparts2HTML(SliceDataStorage& mesh, const char* filename, bool all_layers = true, int layer_nr = -1);
 
 }//namespace cura
 
